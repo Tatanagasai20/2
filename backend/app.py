@@ -3,10 +3,14 @@ from flask_cors import CORS
 from routes.auth import auth_bp
 from routes.attendance import attendance_bp
 from config import Config
+from models.database import init_db
 
 def create_app():
     app = Flask(__name__)
     app.config.from_object(Config)
+    
+    # Initialize database
+    init_db(app)
     
     # Enable CORS for all routes
     CORS(app, origins=['*'])
@@ -17,13 +21,14 @@ def create_app():
     
     @app.route('/health')
     def health_check():
-        return {'status': 'healthy', 'service': 'attendance-backend'}
+        return {'status': 'healthy', 'service': 'attendance-backend', 'database': 'mysql'}
     
     @app.route('/')
     def index():
         return {
             'message': 'Employee Attendance System API',
             'version': '1.0.0',
+            'database': 'MySQL',
             'endpoints': {
                 'auth': '/api/auth/login',
                 'attendance': '/api/attendance/',

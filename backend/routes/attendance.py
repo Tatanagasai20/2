@@ -126,24 +126,11 @@ def get_current_status():
         from datetime import datetime
         today = datetime.now(Config.TIMEZONE).strftime('%Y-%m-%d')
         
-        records = attendance_model.get_daily_attendance(today)
-        
-        # Group by employee and get latest status
-        employee_status = {}
-        for record in records:
-            username = record['employee_username']
-            if username not in employee_status:
-                employee_status[username] = record
-            else:
-                # Keep the latest record
-                current_time = employee_status[username].get('login_time')
-                new_time = record.get('login_time')
-                if new_time and (not current_time or new_time > current_time):
-                    employee_status[username] = record
+        records = attendance_model.get_current_status(today)
         
         return jsonify({
             'success': True,
-            'current_status': list(employee_status.values()),
+            'current_status': records,
             'date': today
         })
         

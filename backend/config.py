@@ -5,7 +5,17 @@ import pytz
 load_dotenv()
 
 class Config:
-    MONGODB_URI = os.getenv('MONGODB_URI')
+    # MySQL configuration
+    MYSQL_HOST = os.getenv('MYSQL_HOST')
+    MYSQL_PORT = int(os.getenv('MYSQL_PORT', 3306))
+    MYSQL_USER = os.getenv('MYSQL_USER')
+    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
+    MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
+    
+    # SQLAlchemy configuration
+    SQLALCHEMY_DATABASE_URI = f"mysql+mysqlconnector://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
+    SQLALCHEMY_TRACK_MODIFICATIONS = False
+    
     JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
     
     # HR credentials

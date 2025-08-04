@@ -7,7 +7,14 @@ load_dotenv()
 class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://localhost:5000')
-    MONGODB_URI = os.getenv('MONGODB_URI')
+    
+    # MySQL configuration
+    MYSQL_HOST = os.getenv('MYSQL_HOST')
+    MYSQL_PORT = int(os.getenv('MYSQL_PORT', 3306))
+    MYSQL_USER = os.getenv('MYSQL_USER')
+    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
+    MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
+    
     GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
     
     # Working hours configuration (IST timezone)

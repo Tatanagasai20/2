@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to manually add employee data to MongoDB database.
+Script to manually add employee data to MySQL database.
 Run this script to add employees before they start using the Telegram bot.
 
 Usage:
@@ -15,7 +15,9 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from models.employee import EmployeeModel
+from models.database import init_db, db
 from config import Config
+from flask import Flask
 
 def add_single_employee():
     """Add a single employee interactively"""
@@ -139,13 +141,18 @@ def main():
     print("🏢 Employee Management System")
     print("=" * 40)
     
-    # Check MongoDB connection
+    # Initialize Flask app and database
     try:
-        employee_model = EmployeeModel()
-        print("✅ Connected to MongoDB")
+        app = Flask(__name__)
+        app.config.from_object(Config)
+        init_db(app)
+        
+        with app.app_context():
+            employee_model = EmployeeModel()
+            print("✅ Connected to MySQL Database")
     except Exception as e:
-        print(f"❌ Failed to connect to MongoDB: {e}")
-        print("Please check your MONGODB_URI in the .env file")
+        print(f"❌ Failed to connect to MySQL: {e}")
+        print("Please check your MySQL configuration in the .env file")
         return
     
     while True:
@@ -157,17 +164,18 @@ def main():
         
         choice = input("\nSelect option (1-4): ").strip()
         
-        if choice == '1':
-            add_single_employee()
-        elif choice == '2':
-            add_multiple_employees()
-        elif choice == '3':
-            list_employees()
-        elif choice == '4':
-            print("👋 Goodbye!")
-            break
-        else:
-            print("❌ Invalid option. Please select 1-4.")
+        with app.app_context():
+            if choice == '1':
+                add_single_employee()
+            elif choice == '2':
+                add_multiple_employees()
+            elif choice == '3':
+                list_employees()
+            elif choice == '4':
+                print("👋 Goodbye!")
+                break
+            else:
+                print("❌ Invalid option. Please select 1-4.")
 
 if __name__ == "__main__":
     main()

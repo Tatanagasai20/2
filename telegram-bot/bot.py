@@ -6,7 +6,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import requests
 import json
 from config import Config
-from pymongo import MongoClient
+import mysql.connector
+from sqlalchemy import create_engine, text
 
 # Enable logging
 logging.basicConfig(
@@ -17,10 +18,15 @@ logger = logging.getLogger(__name__)
 class AttendanceBot:
     def __init__(self):
         self.config = Config()
-        # Connect to MongoDB to check employee records
-        self.client = MongoClient(self.config.MONGODB_URI)
-        self.db = self.client.employee_attendance
-        self.employees_collection = self.db.employees
+        # Connect to MySQL to check employee records
+        self.db_config = {
+            'host': self.config.MYSQL_HOST,
+            'port': self.config.MYSQL_PORT,
+            'user': self.config.MYSQL_USER,
+            'password': self.config.MYSQL_PASSWORD,
+            'database': self.config.MYSQL_DATABASE
+        }
+        self.engine = create_engine(f"mysql+mysqlconnector://{self.config.MYSQL_USER}:{self.config.MYSQL_PASSWORD}@{self.config.MYSQL_HOST}:{self.config.MYSQL_PORT}/{self.config.MYSQL_DATABASE}")
         
     def apply_grace_period(self, timestamp):
         """Apply grace period logic for login times"""
@@ -70,56 +76,75 @@ class AttendanceBot:
     
     def find_employee_by_telegram_user(self, user):
         """Find employee in database by matching Telegram user info"""
-        # First try to find by existing telegram_id (if already linked)
-        employee = self.employees_collection.find_one({"telegram_id": user.id})
-        if employee:
-            return employee
-        
-        # If not found by telegram_id, try to match by name
-        # Since phone numbers are not accessible via Telegram bot API
-        
-        # Try matching by full name (case insensitive and flexible)
-        if user.full_name:
-            # Try exact match first
-            employee = self.employees_collection.find_one({
-                "employee_name": {"$regex": f"^{user.full_name.strip()}$", "$options": "i"}
-            })
-            if employee:
-                # Update the employee record with telegram_id for future use
-                self.employees_collection.update_one(
-                    {"employee_id": employee['employee_id']},
-                    {"$set": {"telegram_id": user.id}}
-                )
-                return employee
-            
-            # Try partial name matching (first name or last name)
-            name_parts = user.full_name.strip().split()
-            if len(name_parts) >= 1:
-                for part in name_parts:
-                    if len(part) >= 3:  # Avoid matching very short names
-                        employee = self.employees_collection.find_one({
-                            "employee_name": {"$regex": f".*{part}.*", "$options": "i"}
-                        })
-                        if employee:
-                            # Update the employee record with telegram_id for future use
-                            self.employees_collection.update_one(
-                                {"employee_id": employee['employee_id']},
-                                {"$set": {"telegram_id": user.id}}
-                            )
-                            return employee
-        
-        # Try matching by username (if employee has set it as their employee_id or phone)
-        if user.username:
-            # Try matching username with employee_id
-            employee = self.employees_collection.find_one({"employee_id": user.username.upper()})
-            if employee:
-                self.employees_collection.update_one(
-                    {"employee_id": employee['employee_id']},
-                    {"$set": {"telegram_id": user.id}}
-                )
-                return employee
-        
-        return None
+        try:
+            with self.engine.connect() as connection:
+                # First try to find by existing telegram_id (if already linked)
+                result = connection.execute(
+                    text("SELECT * FROM employees WHERE telegram_id = :telegram_id AND status = 'active'"),
+                    {"telegram_id": user.id}
+                ).fetchone()
+                
+                if result:
+                    return dict(result._mapping)
+                
+                # If not found by telegram_id, try to match by name
+                if user.full_name:
+                    # Try exact match first (case insensitive)
+                    result = connection.execute(
+                        text("SELECT * FROM employees WHERE LOWER(employee_name) = LOWER(:name) AND status = 'active'"),
+                        {"name": user.full_name.strip()}
+                    ).fetchone()
+                    
+                    if result:
+                        employee = dict(result._mapping)
+                        # Update the employee record with telegram_id for future use
+                        connection.execute(
+                            text("UPDATE employees SET telegram_id = :telegram_id, updated_at = NOW() WHERE employee_id = :employee_id"),
+                            {"telegram_id": user.id, "employee_id": employee['employee_id']}
+                        )
+                        connection.commit()
+                        return employee
+                    
+                    # Try partial name matching (first name or last name)
+                    name_parts = user.full_name.strip().split()
+                    if len(name_parts) >= 1:
+                        for part in name_parts:
+                            if len(part) >= 3:  # Avoid matching very short names
+                                result = connection.execute(
+                                    text("SELECT * FROM employees WHERE employee_name LIKE :name AND status = 'active' LIMIT 1"),
+                                    {"name": f"%{part}%"}
+                                ).fetchone()
+                                
+                                if result:
+                                    employee = dict(result._mapping)
+                                    # Update the employee record with telegram_id for future use
+                                    connection.execute(
+                                        text("UPDATE employees SET telegram_id = :telegram_id, updated_at = NOW() WHERE employee_id = :employee_id"),
+                                        {"telegram_id": user.id, "employee_id": employee['employee_id']}
+                                    )
+                                    connection.commit()
+                                    return employee
+                
+                # Try matching by username (if employee has set it as their employee_id)
+                if user.username:
+                    result = connection.execute(
+                        text("SELECT * FROM employees WHERE UPPER(employee_id) = UPPER(:username) AND status = 'active'"),
+                        {"username": user.username}
+                    ).fetchone()
+                    
+                    if result:
+                        employee = dict(result._mapping)
+                        connection.execute(
+                            text("UPDATE employees SET telegram_id = :telegram_id, updated_at = NOW() WHERE employee_id = :employee_id"),
+                            {"telegram_id": user.id, "employee_id": employee['employee_id']}
+                        )
+                        connection.commit()
+                        return employee
+                
+                return None
+        except Exception as e:
+            logger.error(f"Error finding employee: {e}")
+            return None
 
     async def handle_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle employee login"""
