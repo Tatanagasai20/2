@@ -17,13 +17,7 @@ RUN npm run build
 # Install serve to run the built app
 RUN npm install -g serve
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nextjs -u 1001
 
-# Change ownership of the app directory
-RUN chown -R nextjs:nodejs /app
-USER nextjs
 
 # Expose port
 EXPOSE 3000
