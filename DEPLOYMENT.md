@@ -111,16 +111,19 @@ cd ../nginx
 docker build -t attendance-nginx .
 ```
 
-### Run Services with Docker Network
+### Run Services with Direct Port Mapping
 
 ```bash
-# Create network
-docker network create attendance-network
+# Get your AWS private IP first
+PRIVATE_IP=$(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)
+echo "Your AWS Private IP: $PRIVATE_IP"
+
+# Update nginx configuration with your private IP
+sed -i "s/172.31.x.x/$PRIVATE_IP/g" nginx/nginx.conf
 
 # Run backend
 docker run -d \
   --name backend \
-  --network attendance-network \
   -p 5000:5000 \
   --env-file backend/.env \
   attendance-backend
@@ -128,7 +131,6 @@ docker run -d \
 # Run frontend
 docker run -d \
   --name frontend \
-  --network attendance-network \
   -p 3000:3000 \
   --env-file frontend/.env \
   attendance-frontend
@@ -136,14 +138,12 @@ docker run -d \
 # Run nginx reverse proxy
 docker run -d \
   --name nginx \
-  --network attendance-network \
   -p 80:80 \
   attendance-nginx
 
-# Run telegram bot
+# Run telegram bot (no port mapping needed)
 docker run -d \
   --name telegram-bot \
-  --network attendance-network \
   --env-file telegram-bot/.env \
   attendance-bot
 ```
