@@ -86,7 +86,7 @@ class AttendanceBot:
         # Prepare data for backend
         attendance_data = {
             "employee_name": user.full_name,
-            "employee_username": user.username,
+            "phone_number": user.username,  # Assuming username is phone number
             "telegram_id": user.id,
             "action": "login",
             "timestamp": adjusted_timestamp.isoformat(),
@@ -121,7 +121,7 @@ class AttendanceBot:
         # Prepare data for backend
         attendance_data = {
             "employee_name": user.full_name,
-            "employee_username": user.username,
+            "phone_number": user.username,  # Assuming username is phone number
             "telegram_id": user.id,
             "action": "logout",
             "timestamp": timestamp.isoformat()

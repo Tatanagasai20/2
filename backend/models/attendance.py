@@ -11,7 +11,8 @@ class AttendanceModel:
         
         # Create indexes for better performance
         self.collection.create_index([("telegram_id", 1), ("date", 1)])
-        self.collection.create_index([("employee_username", 1)])
+        self.collection.create_index([("employee_id", 1)])
+        self.collection.create_index([("phone_number", 1)])
         self.collection.create_index([("timestamp", 1)])
     
     def record_attendance(self, data):
@@ -44,7 +45,8 @@ class AttendanceModel:
         # Create new attendance record
         record = {
             "employee_name": data['employee_name'],
-            "employee_username": data['employee_username'],
+            "employee_id": data.get('employee_id'),
+            "phone_number": data.get('phone_number'),
             "telegram_id": data['telegram_id'],
             "date": date_str,
             "login_time": timestamp,
@@ -114,9 +116,13 @@ class AttendanceModel:
         
         return records
     
-    def get_employee_attendance(self, employee_username, start_date=None, end_date=None):
-        """Get attendance records for a specific employee"""
-        query = {"employee_username": employee_username}
+    def get_employee_attendance(self, employee_identifier, start_date=None, end_date=None):
+        """Get attendance records for a specific employee (by ID or phone number)"""
+        # Try to find by employee_id first, then by phone_number
+        query = {"$or": [
+            {"employee_id": employee_identifier},
+            {"phone_number": employee_identifier}
+        ]}
         
         if start_date and end_date:
             query["date"] = {"$gte": start_date, "$lte": end_date}
@@ -167,8 +173,9 @@ class AttendanceModel:
         pipeline = [
             {"$match": match_stage},
             {"$group": {
-                "_id": "$employee_username",
+                "_id": "$employee_id",
                 "employee_name": {"$first": "$employee_name"},
+                "phone_number": {"$first": "$phone_number"},
                 "total_days": {"$sum": 1},
                 "total_hours": {"$sum": "$duration_seconds"},
                 "logged_in_days": {"$sum": {"$cond": [{"$eq": ["$status", "logged_in"]}, 1, 0]}},

@@ -59,20 +59,20 @@ def get_daily_attendance():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@attendance_bp.route('/employee/<username>', methods=['GET'])
+@attendance_bp.route('/employee/<employee_identifier>', methods=['GET'])
 @token_required
-def get_employee_attendance(username):
-    """Get attendance records for specific employee"""
+def get_employee_attendance(employee_identifier):
+    """Get attendance records for specific employee (by ID or phone number)"""
     try:
         start_date = request.args.get('start_date')
         end_date = request.args.get('end_date')
         
-        records = attendance_model.get_employee_attendance(username, start_date, end_date)
+        records = attendance_model.get_employee_attendance(employee_identifier, start_date, end_date)
         
         return jsonify({
             'success': True,
             'records': records,
-            'employee': username
+            'employee': employee_identifier
         })
         
     except Exception as e:
