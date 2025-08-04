@@ -6,6 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import requests
 import json
 from config import Config
+from pymongo import MongoClient
 
 # Enable logging
 logging.basicConfig(
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 class AttendanceBot:
     def __init__(self):
         self.config = Config()
+        # Connect to MongoDB to check employee records
+        self.client = MongoClient(self.config.MONGODB_URI)
+        self.db = self.client.employee_attendance
+        self.employees_collection = self.db.employees
         
     def apply_grace_period(self, timestamp):
         """Apply grace period logic for login times"""
@@ -63,6 +68,42 @@ class AttendanceBot:
             logger.error(f"Error sending data to backend: {e}")
             return None
     
+    def find_employee_by_telegram_user(self, user):
+        """Find employee in database by matching Telegram user info"""
+        # First try to find by existing telegram_id
+        employee = self.employees_collection.find_one({"telegram_id": user.id})
+        if employee:
+            return employee
+        
+        # If not found by telegram_id, try to match by name or phone number
+        # You can customize this matching logic based on your needs
+        
+        # Try matching by full name (case insensitive)
+        if user.full_name:
+            employee = self.employees_collection.find_one({
+                "employee_name": {"$regex": f"^{user.full_name}$", "$options": "i"}
+            })
+            if employee:
+                # Update the employee record with telegram_id for future use
+                self.employees_collection.update_one(
+                    {"employee_id": employee['employee_id']},
+                    {"$set": {"telegram_id": user.id}}
+                )
+                return employee
+        
+        # Try matching by username as phone number
+        if user.username:
+            employee = self.employees_collection.find_one({"phone_number": user.username})
+            if employee:
+                # Update the employee record with telegram_id for future use
+                self.employees_collection.update_one(
+                    {"employee_id": employee['employee_id']},
+                    {"$set": {"telegram_id": user.id}}
+                )
+                return employee
+        
+        return None
+
     async def handle_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle employee login"""
         user = update.effective_user
@@ -71,6 +112,15 @@ class AttendanceBot:
         
         # Check if message is from the designated group
         if str(chat_id) != self.config.GROUP_CHAT_ID:
+            return
+        
+        # Find employee in database
+        employee = self.find_employee_by_telegram_user(user)
+        if not employee:
+            await update.message.reply_text(
+                f"❌ Employee not found in system. Please contact HR to add your details.\n"
+                f"Name: {user.full_name}\nUsername: {user.username}"
+            )
             return
         
         # Check if it's valid work time
@@ -83,10 +133,11 @@ class AttendanceBot:
         # Apply grace period
         adjusted_timestamp = self.apply_grace_period(timestamp)
         
-        # Prepare data for backend
+        # Prepare data for backend using database employee info
         attendance_data = {
-            "employee_name": user.full_name,
-            "phone_number": user.username,  # Assuming username is phone number
+            "employee_id": employee['employee_id'],
+            "employee_name": employee['employee_name'],
+            "phone_number": employee['phone_number'],
             "telegram_id": user.id,
             "action": "login",
             "timestamp": adjusted_timestamp.isoformat(),
@@ -101,7 +152,8 @@ class AttendanceBot:
             grace_msg = " (Grace period applied)" if adjusted_timestamp != timestamp else ""
             await update.message.reply_text(
                 f"✅ Login successful!\n"
-                f"👤 Name: {user.full_name}\n"
+                f"👤 Name: {employee['employee_name']}\n"
+                f"🆔 Employee ID: {employee['employee_id']}\n"
                 f"🕘 Time: {adjusted_timestamp.strftime('%I:%M %p')}{grace_msg}\n"
                 f"📅 Date: {adjusted_timestamp.strftime('%d/%m/%Y')}"
             )
@@ -118,10 +170,19 @@ class AttendanceBot:
         if str(chat_id) != self.config.GROUP_CHAT_ID:
             return
         
-        # Prepare data for backend
+        # Find employee in database
+        employee = self.find_employee_by_telegram_user(user)
+        if not employee:
+            await update.message.reply_text(
+                f"❌ Employee not found in system. Please contact HR."
+            )
+            return
+        
+        # Prepare data for backend using database employee info
         attendance_data = {
-            "employee_name": user.full_name,
-            "phone_number": user.username,  # Assuming username is phone number
+            "employee_id": employee['employee_id'],
+            "employee_name": employee['employee_name'],
+            "phone_number": employee['phone_number'],
             "telegram_id": user.id,
             "action": "logout",
             "timestamp": timestamp.isoformat()
@@ -134,7 +195,8 @@ class AttendanceBot:
             duration = result['duration']
             await update.message.reply_text(
                 f"✅ Logout successful!\n"
-                f"👤 Name: {user.full_name}\n"
+                f"👤 Name: {employee['employee_name']}\n"
+                f"🆔 Employee ID: {employee['employee_id']}\n"
                 f"🕘 Time: {timestamp.strftime('%I:%M %p')}\n"
                 f"📅 Date: {timestamp.strftime('%d/%m/%Y')}\n"
                 f"⏱️ Duration: {duration}"
