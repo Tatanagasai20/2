@@ -70,18 +70,19 @@ class AttendanceBot:
     
     def find_employee_by_telegram_user(self, user):
         """Find employee in database by matching Telegram user info"""
-        # First try to find by existing telegram_id
+        # First try to find by existing telegram_id (if already linked)
         employee = self.employees_collection.find_one({"telegram_id": user.id})
         if employee:
             return employee
         
-        # If not found by telegram_id, try to match by name or phone number
-        # You can customize this matching logic based on your needs
+        # If not found by telegram_id, try to match by name
+        # Since phone numbers are not accessible via Telegram bot API
         
-        # Try matching by full name (case insensitive)
+        # Try matching by full name (case insensitive and flexible)
         if user.full_name:
+            # Try exact match first
             employee = self.employees_collection.find_one({
-                "employee_name": {"$regex": f"^{user.full_name}$", "$options": "i"}
+                "employee_name": {"$regex": f"^{user.full_name.strip()}$", "$options": "i"}
             })
             if employee:
                 # Update the employee record with telegram_id for future use
@@ -90,12 +91,28 @@ class AttendanceBot:
                     {"$set": {"telegram_id": user.id}}
                 )
                 return employee
+            
+            # Try partial name matching (first name or last name)
+            name_parts = user.full_name.strip().split()
+            if len(name_parts) >= 1:
+                for part in name_parts:
+                    if len(part) >= 3:  # Avoid matching very short names
+                        employee = self.employees_collection.find_one({
+                            "employee_name": {"$regex": f".*{part}.*", "$options": "i"}
+                        })
+                        if employee:
+                            # Update the employee record with telegram_id for future use
+                            self.employees_collection.update_one(
+                                {"employee_id": employee['employee_id']},
+                                {"$set": {"telegram_id": user.id}}
+                            )
+                            return employee
         
-        # Try matching by username as phone number
+        # Try matching by username (if employee has set it as their employee_id or phone)
         if user.username:
-            employee = self.employees_collection.find_one({"phone_number": user.username})
+            # Try matching username with employee_id
+            employee = self.employees_collection.find_one({"employee_id": user.username.upper()})
             if employee:
-                # Update the employee record with telegram_id for future use
                 self.employees_collection.update_one(
                     {"employee_id": employee['employee_id']},
                     {"$set": {"telegram_id": user.id}}
@@ -118,8 +135,15 @@ class AttendanceBot:
         employee = self.find_employee_by_telegram_user(user)
         if not employee:
             await update.message.reply_text(
-                f"❌ Employee not found in system. Please contact HR to add your details.\n"
-                f"Name: {user.full_name}\nUsername: {user.username}"
+                f"❌ Employee not found in system.\n\n"
+                f"📋 Your Telegram Details:\n"
+                f"• Name: {user.full_name or 'Not set'}\n"
+                f"• Username: @{user.username or 'Not set'}\n"
+                f"• ID: {user.id}\n\n"
+                f"💡 Please contact HR to:\n"
+                f"1. Add your details to the system\n"
+                f"2. Link your Telegram account\n\n"
+                f"📞 Make sure your Telegram name matches your employee name in the database."
             )
             return
         

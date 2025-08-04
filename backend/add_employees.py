@@ -115,13 +115,24 @@ def list_employees():
         return
     
     print(f"Found {len(employees)} employees:")
-    print("-" * 60)
-    print(f"{'ID':<10} {'Name':<25} {'Phone':<15} {'Telegram'}")
-    print("-" * 60)
+    print("-" * 80)
+    print(f"{'ID':<10} {'Name':<25} {'Phone':<15} {'Telegram':<10} {'Status'}")
+    print("-" * 80)
     
     for emp in employees:
-        telegram_status = "✅" if emp.get('telegram_id') else "❌"
-        print(f"{emp['employee_id']:<10} {emp['employee_name']:<25} {emp['phone_number']:<15} {telegram_status}")
+        telegram_status = "✅ Linked" if emp.get('telegram_id') else "❌ Not Linked"
+        telegram_id = str(emp.get('telegram_id', 'N/A'))[:8] + "..." if emp.get('telegram_id') else "N/A"
+        print(f"{emp['employee_id']:<10} {emp['employee_name']:<25} {emp['phone_number']:<15} {telegram_id:<10} {telegram_status}")
+    
+    print(f"\n📊 Summary:")
+    total = len(employees)
+    linked = len([emp for emp in employees if emp.get('telegram_id')])
+    print(f"Total Employees: {total}")
+    print(f"Linked to Telegram: {linked}")
+    print(f"Not Linked: {total - linked}")
+    
+    if total - linked > 0:
+        print(f"\n💡 Tip: Employees need to send 'login' message in Telegram group to get linked automatically.")
 
 def main():
     """Main function"""
