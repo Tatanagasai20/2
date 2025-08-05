@@ -12,6 +12,9 @@ def create_app():
     # Initialize database
     init_db(app)
     
+    with app.app_context():
+        db.create_all(checkfirst=True)
+    
     # Enable CORS for all routes
     CORS(app, origins=['*'])
     
