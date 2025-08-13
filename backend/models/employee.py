@@ -1,97 +1,136 @@
-from models.database import db, Employee
+from models.database import get_db
 from datetime import datetime
-from sqlalchemy.exc import IntegrityError
+from bson import ObjectId
 
 class EmployeeModel:
     def __init__(self):
-        pass
+        self.db = get_db()
     
     def add_employee(self, employee_data):
         """Add a new employee"""
         try:
-            employee = Employee(
-                employee_id=employee_data['employee_id'],
-                employee_name=employee_data['employee_name'],
-                phone_number=employee_data['phone_number'],
-                telegram_id=employee_data.get('telegram_id'),
-                status='active'
-            )
+            # Check if employee already exists
+            existing = self.db.employees.find_one({
+                '$or': [
+                    {'employee_id': employee_data['employee_id']},
+                    {'phone_number': employee_data['phone_number']}
+                ]
+            })
             
-            db.session.add(employee)
-            db.session.commit()
-            return {"success": True, "id": employee.id}
-        except IntegrityError as e:
-            db.session.rollback()
-            if "employee_id" in str(e):
-                return {"error": "Employee ID already exists"}
-            elif "phone_number" in str(e):
-                return {"error": "Phone number already exists"}
-            else:
-                return {"error": "Employee already exists"}
+            if existing:
+                return {"error": "Employee already exists with this ID or phone number"}
+            
+            # Add timestamps
+            employee_data['created_at'] = datetime.utcnow()
+            employee_data['updated_at'] = datetime.utcnow()
+            employee_data['status'] = 'active'
+            
+            result = self.db.employees.insert_one(employee_data)
+            return {"success": True, "employee_id": str(result.inserted_id)}
+            
         except Exception as e:
-            db.session.rollback()
+            print(f"Error adding employee: {e}")
             return {"error": str(e)}
     
-    def get_employee_by_phone(self, phone_number):
-        """Get employee by phone number"""
-        employee = Employee.query.filter_by(phone_number=phone_number, status='active').first()
-        return employee.to_dict() if employee else None
+    def get_employee_by_telegram_id(self, telegram_id):
+        """Get employee by Telegram ID"""
+        try:
+            employee = self.db.employees.find_one({'telegram_id': telegram_id})
+            if employee:
+                employee['_id'] = str(employee['_id'])
+                if employee.get('created_at'):
+                    employee['created_at'] = employee['created_at'].isoformat()
+                if employee.get('updated_at'):
+                    employee['updated_at'] = employee['updated_at'].isoformat()
+            return employee
+        except Exception as e:
+            print(f"Error getting employee by telegram ID: {e}")
+            return None
     
     def get_employee_by_id(self, employee_id):
         """Get employee by employee ID"""
-        employee = Employee.query.filter_by(employee_id=employee_id, status='active').first()
-        return employee.to_dict() if employee else None
-    
-    def get_employee_by_telegram(self, telegram_id):
-        """Get employee by telegram ID"""
-        employee = Employee.query.filter_by(telegram_id=telegram_id, status='active').first()
-        return employee.to_dict() if employee else None
-    
-    def update_telegram_id(self, employee_id, telegram_id):
-        """Update telegram ID for an employee"""
         try:
-            employee = Employee.query.filter_by(employee_id=employee_id).first()
+            employee = self.db.employees.find_one({'employee_id': employee_id})
             if employee:
-                employee.telegram_id = telegram_id
-                employee.updated_at = datetime.utcnow()
-                db.session.commit()
-                return True
-            return False
+                employee['_id'] = str(employee['_id'])
+                if employee.get('created_at'):
+                    employee['created_at'] = employee['created_at'].isoformat()
+                if employee.get('updated_at'):
+                    employee['updated_at'] = employee['updated_at'].isoformat()
+            return employee
         except Exception as e:
-            db.session.rollback()
-            return False
+            print(f"Error getting employee by ID: {e}")
+            return None
     
     def get_all_employees(self):
-        """Get all active employees"""
-        employees = Employee.query.filter_by(status='active').order_by(Employee.employee_name).all()
-        return [emp.to_dict() for emp in employees]
+        """Get all employees"""
+        try:
+            employees = list(self.db.employees.find({'status': 'active'}))
+            
+            # Convert ObjectId to string for JSON serialization
+            for employee in employees:
+                employee['_id'] = str(employee['_id'])
+                if employee.get('created_at'):
+                    employee['created_at'] = employee['created_at'].isoformat()
+                if employee.get('updated_at'):
+                    employee['updated_at'] = employee['updated_at'].isoformat()
+            
+            return employees
+        except Exception as e:
+            print(f"Error getting all employees: {e}")
+            return []
     
-    def update_employee(self, employee_id, updates):
+    def update_employee(self, employee_id, update_data):
         """Update employee information"""
         try:
-            employee = Employee.query.filter_by(employee_id=employee_id).first()
-            if employee:
-                for key, value in updates.items():
-                    if hasattr(employee, key):
-                        setattr(employee, key, value)
-                employee.updated_at = datetime.utcnow()
-                db.session.commit()
-                return True
-            return False
+            update_data['updated_at'] = datetime.utcnow()
+            
+            result = self.db.employees.update_one(
+                {'employee_id': employee_id},
+                {'$set': update_data}
+            )
+            
+            return result.modified_count > 0
         except Exception as e:
-            db.session.rollback()
+            print(f"Error updating employee: {e}")
             return False
     
-    def deactivate_employee(self, employee_id):
-        """Deactivate an employee"""
+    def delete_employee(self, employee_id):
+        """Soft delete employee (set status to inactive)"""
         try:
-            employee = Employee.query.filter_by(employee_id=employee_id).first()
-            if employee:
-                employee.status = 'inactive'
-                employee.updated_at = datetime.utcnow()
-                db.session.commit()
-                return True
-            return False
+            result = self.db.employees.update_one(
+                {'employee_id': employee_id},
+                {'$set': {'status': 'inactive', 'updated_at': datetime.utcnow()}}
+            )
+            
+            return result.modified_count > 0
         except Exception as e:
-            db.session.rollback()
+            print(f"Error deleting employee: {e}")
             return False
+    
+    def search_employees(self, search_term):
+        """Search employees by name, ID, or phone number"""
+        try:
+            query = {
+                '$or': [
+                    {'employee_name': {'$regex': search_term, '$options': 'i'}},
+                    {'employee_id': {'$regex': search_term, '$options': 'i'}},
+                    {'phone_number': {'$regex': search_term, '$options': 'i'}}
+                ],
+                'status': 'active'
+            }
+            
+            employees = list(self.db.employees.find(query))
+            
+            # Convert ObjectId to string for JSON serialization
+            for employee in employees:
+                employee['_id'] = str(employee['_id'])
+                if employee.get('created_at'):
+                    employee['created_at'] = employee['created_at'].isoformat()
+                if employee.get('updated_at'):
+                    employee['updated_at'] = employee['updated_at'].isoformat()
+            
+            return employees
+        except Exception as e:
+            print(f"Error searching employees: {e}")
+            return []
