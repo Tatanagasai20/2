@@ -1,93 +1,62 @@
-from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime
-import pytz
+from pymongo import MongoClient
 from config import Config
+import logging
 
-db = SQLAlchemy()
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-class Employee(db.Model):
-    __tablename__ = 'employees'
+class Database:
+    def __init__(self):
+        self.client = None
+        self.db = None
+        
+    def connect(self):
+        try:
+            self.client = MongoClient(Config.MONGODB_URI)
+            self.db = self.client.employee_attendance
+            logger.info("Connected to MongoDB successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to connect to MongoDB: {e}")
+            return False
     
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    employee_id = db.Column(db.String(50), unique=True, nullable=False, index=True)
-    employee_name = db.Column(db.String(100), nullable=False)
-    phone_number = db.Column(db.String(20), unique=True, nullable=False)
-    telegram_id = db.Column(db.BigInteger, unique=True, nullable=True, index=True)
-    status = db.Column(db.String(20), default='active', nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    def get_db(self):
+        if not self.db:
+            self.connect()
+        return self.db
     
-    # Relationship
-    attendance_records = db.relationship('AttendanceRecord', backref='employee', lazy=True)
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'employee_id': self.employee_id,
-            'employee_name': self.employee_name,
-            'phone_number': self.phone_number,
-            'telegram_id': self.telegram_id,
-            'status': self.status,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
-        }
+    def close(self):
+        if self.client:
+            self.client.close()
+            logger.info("MongoDB connection closed")
 
-class AttendanceRecord(db.Model):
-    __tablename__ = 'attendance_records'
-    
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    employee_id = db.Column(db.String(50), db.ForeignKey('employees.employee_id'), nullable=False, index=True)
-    employee_name = db.Column(db.String(100), nullable=False)
-    phone_number = db.Column(db.String(20), nullable=False)
-    telegram_id = db.Column(db.BigInteger, nullable=False, index=True)
-    date = db.Column(db.Date, nullable=False, index=True)
-    login_time = db.Column(db.DateTime(timezone=True), nullable=True)
-    logout_time = db.Column(db.DateTime(timezone=True), nullable=True)
-    duration = db.Column(db.String(20), nullable=True)
-    duration_seconds = db.Column(db.Integer, nullable=True)
-    status = db.Column(db.String(20), nullable=False, default='logged_in')  # logged_in, logged_out
-    is_grace_applied = db.Column(db.Boolean, default=False, nullable=False)
-    original_timestamp = db.Column(db.DateTime(timezone=True), nullable=True)
-    manually_edited = db.Column(db.Boolean, default=False, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    
-    # Composite index for efficient queries
-    __table_args__ = (
-        db.Index('idx_employee_date', 'employee_id', 'date'),
-        db.Index('idx_telegram_date', 'telegram_id', 'date'),
-        db.Index('idx_date_status', 'date', 'status'),
-    )
-    
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'employee_id': self.employee_id,
-            'employee_name': self.employee_name,
-            'phone_number': self.phone_number,
-            'telegram_id': self.telegram_id,
-            'date': self.date.isoformat() if self.date else None,
-            'login_time': self.login_time.isoformat() if self.login_time else None,
-            'logout_time': self.logout_time.isoformat() if self.logout_time else None,
-            'duration': self.duration,
-            'duration_seconds': self.duration_seconds,
-            'status': self.status,
-            'is_grace_applied': self.is_grace_applied,
-            'original_timestamp': self.original_timestamp.isoformat() if self.original_timestamp else None,
-            'manually_edited': self.manually_edited,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None
-        }
+# Global database instance
+db_instance = Database()
 
 def init_db(app):
-    """Initialize database with Flask app"""
-    db.init_app(app)
-    
+    """Initialize database connection"""
     with app.app_context():
-        # Create all tables
-        db.create_all()
-        print("Database tables created successfully!")
-        
+        if db_instance.connect():
+            # Create indexes for better performance
+            try:
+                db = db_instance.get_db()
+                
+                # Create indexes
+                db.employees.create_index("employee_id", unique=True)
+                db.employees.create_index("phone_number", unique=True)
+                db.employees.create_index("telegram_id", unique=True)
+                
+                db.attendance_records.create_index([("employee_id", 1), ("date", 1)])
+                db.attendance_records.create_index("date")
+                db.attendance_records.create_index("status")
+                
+                logger.info("Database indexes created successfully")
+            except Exception as e:
+                logger.error(f"Error creating indexes: {e}")
+        else:
+            logger.error("Failed to initialize database")
+
 def get_db():
     """Get database instance"""
-    return db
+    return db_instance.get_db()
