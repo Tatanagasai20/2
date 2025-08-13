@@ -6,8 +6,8 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import requests
 import json
 from config import Config
-import mysql.connector
-from sqlalchemy import create_engine, text
+from pymongo import MongoClient
+import pytz
 
 # Enable logging
 logging.basicConfig(
@@ -18,15 +18,15 @@ logger = logging.getLogger(__name__)
 class AttendanceBot:
     def __init__(self):
         self.config = Config()
-        # Connect to MySQL to check employee records
-        self.db_config = {
-            'host': self.config.MYSQL_HOST,
-            'port': self.config.MYSQL_PORT,
-            'user': self.config.MYSQL_USER,
-            'password': self.config.MYSQL_PASSWORD,
-            'database': self.config.MYSQL_DATABASE
-        }
-        self.engine = create_engine(f"mysql+mysqlconnector://{self.config.MYSQL_USER}:{self.config.MYSQL_PASSWORD}@{self.config.MYSQL_HOST}:{self.config.MYSQL_PORT}/{self.config.MYSQL_DATABASE}")
+        # Connect to MongoDB
+        try:
+            self.client = MongoClient(self.config.MONGODB_URI)
+            self.db = self.client.employee_attendance
+            logger.info("Connected to MongoDB successfully")
+        except Exception as e:
+            logger.error(f"Failed to connect to MongoDB: {e}")
+            self.client = None
+            self.db = None
         
     def apply_grace_period(self, timestamp):
         """Apply grace period logic for login times"""
@@ -74,78 +74,127 @@ class AttendanceBot:
             logger.error(f"Error sending data to backend: {e}")
             return None
     
-    def find_employee_by_telegram_user(self, user):
-        """Find employee in database by matching Telegram user info"""
+    def find_employee_by_telegram_id(self, telegram_id):
+        """Find employee by Telegram ID"""
         try:
-            with self.engine.connect() as connection:
-                # First try to find by existing telegram_id (if already linked)
-                result = connection.execute(
-                    text("SELECT * FROM employees WHERE telegram_id = :telegram_id AND status = 'active'"),
-                    {"telegram_id": user.id}
-                ).fetchone()
-                
-                if result:
-                    return dict(result._mapping)
-                
-                # If not found by telegram_id, try to match by name
-                if user.full_name:
-                    # Try exact match first (case insensitive)
-                    result = connection.execute(
-                        text("SELECT * FROM employees WHERE LOWER(employee_name) = LOWER(:name) AND status = 'active'"),
-                        {"name": user.full_name.strip()}
-                    ).fetchone()
-                    
-                    if result:
-                        employee = dict(result._mapping)
-                        # Update the employee record with telegram_id for future use
-                        connection.execute(
-                            text("UPDATE employees SET telegram_id = :telegram_id, updated_at = NOW() WHERE employee_id = :employee_id"),
-                            {"telegram_id": user.id, "employee_id": employee['employee_id']}
-                        )
-                        connection.commit()
-                        return employee
-                    
-                    # Try partial name matching (first name or last name)
-                    name_parts = user.full_name.strip().split()
-                    if len(name_parts) >= 1:
-                        for part in name_parts:
-                            if len(part) >= 3:  # Avoid matching very short names
-                                result = connection.execute(
-                                    text("SELECT * FROM employees WHERE employee_name LIKE :name AND status = 'active' LIMIT 1"),
-                                    {"name": f"%{part}%"}
-                                ).fetchone()
-                                
-                                if result:
-                                    employee = dict(result._mapping)
-                                    # Update the employee record with telegram_id for future use
-                                    connection.execute(
-                                        text("UPDATE employees SET telegram_id = :telegram_id, updated_at = NOW() WHERE employee_id = :employee_id"),
-                                        {"telegram_id": user.id, "employee_id": employee['employee_id']}
-                                    )
-                                    connection.commit()
-                                    return employee
-                
-                # Try matching by username (if employee has set it as their employee_id)
-                if user.username:
-                    result = connection.execute(
-                        text("SELECT * FROM employees WHERE UPPER(employee_id) = UPPER(:username) AND status = 'active'"),
-                        {"username": user.username}
-                    ).fetchone()
-                    
-                    if result:
-                        employee = dict(result._mapping)
-                        connection.execute(
-                            text("UPDATE employees SET telegram_id = :telegram_id, updated_at = NOW() WHERE employee_id = :employee_id"),
-                            {"telegram_id": user.id, "employee_id": employee['employee_id']}
-                        )
-                        connection.commit()
-                        return employee
-                
+            if not self.db:
                 return None
+            return self.db.employees.find_one({'telegram_id': telegram_id, 'status': 'active'})
         except Exception as e:
-            logger.error(f"Error finding employee: {e}")
+            logger.error(f"Error finding employee by telegram ID: {e}")
             return None
-
+    
+    def find_employee_by_name(self, name):
+        """Find employee by name (for first-time registration)"""
+        try:
+            if not self.db:
+                return None
+            # Try exact match first
+            employee = self.db.employees.find_one({
+                'employee_name': {'$regex': f'^{name}$', '$options': 'i'},
+                'status': 'active'
+            })
+            if employee:
+                return employee
+            
+            # Try partial match
+            employee = self.db.employees.find_one({
+                'employee_name': {'$regex': name, '$options': 'i'},
+                'status': 'active'
+            })
+            return employee
+        except Exception as e:
+            logger.error(f"Error finding employee by name: {e}")
+            return None
+    
+    def update_employee_telegram_id(self, employee_id, telegram_id):
+        """Update employee with Telegram ID"""
+        try:
+            if not self.db:
+                return False
+            result = self.db.employees.update_one(
+                {'employee_id': employee_id},
+                {'$set': {'telegram_id': telegram_id, 'updated_at': datetime.utcnow()}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"Error updating employee telegram ID: {e}")
+            return False
+    
+    async def handle_register(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle employee registration - first time setup"""
+        user = update.effective_user
+        chat_id = update.effective_chat.id
+        
+        # Check if message is from the designated group
+        if str(chat_id) != self.config.GROUP_CHAT_ID:
+            return
+        
+        # Check if already registered
+        existing_employee = self.find_employee_by_telegram_id(user.id)
+        if existing_employee:
+            await update.message.reply_text(
+                f"✅ You are already registered!\n"
+                f"👤 Name: {existing_employee['employee_name']}\n"
+                f"🆔 Employee ID: {existing_employee['employee_id']}\n\n"
+                f"You can now use:\n"
+                f"• /login - to check in\n"
+                f"• /logout - to check out"
+            )
+            return
+        
+        # Check if user has a full name
+        if not user.full_name:
+            await update.message.reply_text(
+                f"❌ Please set your full name in Telegram first!\n\n"
+                f"📱 Go to Telegram Settings → Edit Profile → Name\n"
+                f"Make sure it matches your employee name in the system.\n\n"
+                f"Then try /register again."
+            )
+            return
+        
+        # Try to find employee by name
+        employee = self.find_employee_by_name(user.full_name.strip())
+        if not employee:
+            await update.message.reply_text(
+                f"❌ Employee not found in system.\n\n"
+                f"📋 Your Telegram Details:\n"
+                f"• Name: {user.full_name}\n"
+                f"• Username: @{user.username or 'Not set'}\n"
+                f"• ID: {user.id}\n\n"
+                f"💡 Please contact HR to:\n"
+                f"1. Add your details to the system\n"
+                f"2. Make sure your Telegram name matches your employee name\n\n"
+                f"📞 Your Telegram name must exactly match: {user.full_name}"
+            )
+            return
+        
+        # Check if employee already has a Telegram ID
+        if employee.get('telegram_id'):
+            await update.message.reply_text(
+                f"⚠️ This employee is already linked to another Telegram account.\n"
+                f"Please contact HR to resolve this."
+            )
+            return
+        
+        # Link employee to Telegram ID
+        if self.update_employee_telegram_id(employee['employee_id'], user.id):
+            await update.message.reply_text(
+                f"🎉 Registration successful!\n\n"
+                f"👤 Name: {employee['employee_name']}\n"
+                f"🆔 Employee ID: {employee['employee_id']}\n"
+                f"📱 Telegram linked successfully\n\n"
+                f"✅ You can now use:\n"
+                f"• /login - to check in\n"
+                f"• /logout - to check out\n\n"
+                f"⏰ Working Hours: 9:00 AM - 6:00 PM IST\n"
+                f"🕘 Grace Period: 9:00-9:05 AM (recorded as 9:00 AM)"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Registration failed. Please try again or contact HR."
+            )
+    
     async def handle_login(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle employee login"""
         user = update.effective_user
@@ -157,18 +206,12 @@ class AttendanceBot:
             return
         
         # Find employee in database
-        employee = self.find_employee_by_telegram_user(user)
+        employee = self.find_employee_by_telegram_id(user.id)
         if not employee:
             await update.message.reply_text(
-                f"❌ Employee not found in system.\n\n"
-                f"📋 Your Telegram Details:\n"
-                f"• Name: {user.full_name or 'Not set'}\n"
-                f"• Username: @{user.username or 'Not set'}\n"
-                f"• ID: {user.id}\n\n"
-                f"💡 Please contact HR to:\n"
-                f"1. Add your details to the system\n"
-                f"2. Link your Telegram account\n\n"
-                f"📞 Make sure your Telegram name matches your employee name in the database."
+                f"❌ You are not registered yet!\n\n"
+                f"📝 Please use /register first to link your Telegram account.\n\n"
+                f"💡 If you're a new employee, contact HR to add you to the system."
             )
             return
         
@@ -186,7 +229,7 @@ class AttendanceBot:
         attendance_data = {
             "employee_id": employee['employee_id'],
             "employee_name": employee['employee_name'],
-            "phone_number": employee['phone_number'],
+            "phone_number": employee.get('phone_number', ''),
             "telegram_id": user.id,
             "action": "login",
             "timestamp": adjusted_timestamp.isoformat(),
@@ -220,10 +263,11 @@ class AttendanceBot:
             return
         
         # Find employee in database
-        employee = self.find_employee_by_telegram_user(user)
+        employee = self.find_employee_by_telegram_id(user.id)
         if not employee:
             await update.message.reply_text(
-                f"❌ Employee not found in system. Please contact HR."
+                f"❌ You are not registered yet!\n\n"
+                f"📝 Please use /register first to link your Telegram account."
             )
             return
         
@@ -231,7 +275,7 @@ class AttendanceBot:
         attendance_data = {
             "employee_id": employee['employee_id'],
             "employee_name": employee['employee_name'],
-            "phone_number": employee['phone_number'],
+            "phone_number": employee.get('phone_number', ''),
             "telegram_id": user.id,
             "action": "logout",
             "timestamp": timestamp.isoformat()
@@ -272,11 +316,13 @@ class AttendanceBot:
         """Handle /start command"""
         welcome_message = (
             "👋 Welcome to Employee Attendance Bot!\n\n"
-            "Commands:\n"
-            "• Type 'login', 'checkin', or 'in' to check in\n"
-            "• Type 'logout', 'checkout', or 'out' to check out\n\n"
-            "Working Hours: 9:00 AM - 6:00 PM IST\n"
-            "Grace Period: 5 minutes (9:00-9:05 AM counted as 9:00 AM)\n\n"
+            "📝 First Time Setup:\n"
+            "• Use /register to link your Telegram account\n\n"
+            "✅ After Registration:\n"
+            "• Use /login to check in\n"
+            "• Use /logout to check out\n\n"
+            "⏰ Working Hours: 9:00 AM - 6:00 PM IST\n"
+            "🕘 Grace Period: 5 minutes (9:00-9:05 AM counted as 9:00 AM)\n\n"
             "📝 Note: Only works in the designated group chat."
         )
         await update.message.reply_text(welcome_message)
@@ -285,14 +331,20 @@ class AttendanceBot:
         """Handle /help command"""
         help_message = (
             "🆘 Employee Attendance Bot Help\n\n"
-            "📝 How to use:\n"
-            "1. Send 'login' message when you start work\n"
-            "2. Send 'logout' message when you finish work\n\n"
+            "📝 First Time Setup:\n"
+            "1. Use /register to link your Telegram account\n"
+            "2. Make sure your Telegram name matches your employee name\n\n"
+            "✅ Daily Usage:\n"
+            "1. Send /login when you start work\n"
+            "2. Send /logout when you finish work\n\n"
             "⏰ Working Hours:\n"
             "• Monday to Friday: 9:00 AM - 6:00 PM IST\n"
             "• Grace period: 9:00-9:05 AM (recorded as 9:00 AM)\n\n"
-            "✅ Valid login commands: login, checkin, in\n"
-            "✅ Valid logout commands: logout, checkout, out\n\n"
+            "🔑 Commands:\n"
+            "• /register - Link your Telegram account (first time only)\n"
+            "• /login - Check in for the day\n"
+            "• /logout - Check out for the day\n"
+            "• /help - Show this help message\n\n"
             "❗ Important: Bot only works in the designated group chat."
         )
         await update.message.reply_text(help_message)
@@ -303,12 +355,17 @@ class AttendanceBot:
             logger.error("BOT_TOKEN not found in environment variables")
             return
         
+        if not self.db:
+            logger.error("MongoDB connection failed. Cannot start bot.")
+            return
+        
         # Create application
         application = Application.builder().token(self.config.BOT_TOKEN).build()
         
         # Add handlers
         application.add_handler(CommandHandler("start", self.start_command))
         application.add_handler(CommandHandler("help", self.help_command))
+        application.add_handler(CommandHandler("register", self.handle_register))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
         
         # Start polling
