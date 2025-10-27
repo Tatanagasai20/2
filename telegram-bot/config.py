@@ -8,12 +8,8 @@ class Config:
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://localhost:5000')
     
-    # MySQL configuration
-    MYSQL_HOST = os.getenv('MYSQL_HOST')
-    MYSQL_PORT = int(os.getenv('MYSQL_PORT', 3306))
-    MYSQL_USER = os.getenv('MYSQL_USER')
-    MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD')
-    MYSQL_DATABASE = os.getenv('MYSQL_DATABASE')
+    # MongoDB configuration
+    MONGODB_URI = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/employee_attendance')
     
     GROUP_CHAT_ID = os.getenv('GROUP_CHAT_ID')
     
@@ -24,5 +20,6 @@ class Config:
     GRACE_PERIOD_MINUTES = 5  # 5 minutes grace period
     
     # Commands
-    LOGIN_COMMANDS = ['login', 'checkin', 'in']
-    LOGOUT_COMMANDS = ['logout', 'checkout', 'out']
+    LOGIN_COMMANDS = ['/login', 'login', 'checkin', 'in']
+    LOGOUT_COMMANDS = ['/logout', 'logout', 'checkout', 'out']
+    REGISTER_COMMANDS = ['/register', 'register', 'start']

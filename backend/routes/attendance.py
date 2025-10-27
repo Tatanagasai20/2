@@ -2,10 +2,12 @@ from flask import Blueprint, request, jsonify
 import jwt
 from functools import wraps
 from models.attendance import AttendanceModel
+from models.employee import EmployeeModel
 from config import Config
 
 attendance_bp = Blueprint('attendance', __name__)
 attendance_model = AttendanceModel()
+employee_model = EmployeeModel()
 
 def token_required(f):
     """Decorator to require valid JWT token"""
@@ -39,6 +41,22 @@ def record_attendance():
         else:
             return jsonify({'error': 'Failed to record attendance'}), 500
             
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@attendance_bp.route('/employees', methods=['GET'])
+@token_required
+def get_all_employees():
+    """Get all employees for HR dashboard"""
+    try:
+        employees = employee_model.get_all_employees()
+        
+        return jsonify({
+            'success': True,
+            'employees': employees,
+            'total_count': len(employees)
+        })
+        
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

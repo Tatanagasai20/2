@@ -35,6 +35,10 @@ export const authAPI = {
   verify: () => api.post('/auth/verify'),
 };
 
+export const employeeAPI = {
+  getAllEmployees: () => api.get('/attendance/employees'),
+};
+
 export const attendanceAPI = {
   getCurrentStatus: () => api.get('/attendance/current-status'),
   getDailyAttendance: (date) => api.get(`/attendance/daily?date=${date}`),
